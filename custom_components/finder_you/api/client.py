@@ -475,7 +475,49 @@ class FinderHomeClient:
         )
         await self._call("CloseFull", body)
 
+    async def activate_scenario(self, plant_id: bytes, scenario_id: bytes) -> None:
+        body = (
+            field_string(1, self._client_info)
+            + field_string(2, plant_id)
+            + field_string(3, scenario_id)
+        )
+        await self._call("ActivateScenario", body)
+
+    async def switch_on(self, plant_id: bytes, device_id: bytes, channel: int = 1) -> None:
+        channel_sub = field_varint(1, channel)
+        body = (
+            field_string(1, self._client_info)
+            + field_string(2, plant_id)
+            + field_string(3, device_id)
+            + field_string(4, channel_sub)
+        )
+        await self._call("SwitchOn", body)
+
+    async def switch_off(self, plant_id: bytes, device_id: bytes, channel: int = 1) -> None:
+        channel_sub = field_varint(1, channel)
+        body = (
+            field_string(1, self._client_info)
+            + field_string(2, plant_id)
+            + field_string(3, device_id)
+            + field_string(4, channel_sub)
+        )
+        await self._call("SwitchOff", body)
+
+    async def set_brightness(
+        self, plant_id: bytes, device_id: bytes, percent: int, channel: int = 1
+    ) -> None:
+        channel_sub = field_varint(1, channel)
+        body = (
+            field_string(1, self._client_info)
+            + field_string(2, plant_id)
+            + field_string(3, device_id)
+            + field_varint(4, percent)
+            + field_string(5, channel_sub)
+        )
+        await self._call("SetBrightness", body)
+
     async def close(self) -> None:
+
         if self._notification_keepalive_task:
             self._notification_keepalive_task.cancel()
         if self._read_task:

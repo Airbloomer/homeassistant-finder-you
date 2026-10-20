@@ -13,6 +13,7 @@ from homeassistant.components.cover import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -29,8 +30,6 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: FinderYouCoordinator = hass.data[DOMAIN][entry.entry_id]
-    # First refresh populates the shutter list.
-    await coordinator.async_config_entry_first_refresh()
     async_add_entities(FinderYouCover(coordinator, shutter) for shutter in coordinator.shutters)
 
 
@@ -38,37 +37,37 @@ class FinderYouCover(CoordinatorEntity[FinderYouCoordinator], CoverEntity, Resto
     _attr_has_entity_name = True
     _attr_device_class = CoverDeviceClass.SHUTTER
     _attr_supported_features = (
-        CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.SET_POSITION
+        CoverEntityFeature.OPEN
+        | CoverEntityFeature.CLOSE
+        | CoverEntityFeature.STOP
+        | CoverEntityFeature.SET_POSITION
     )
-    # The cloud's reply to SetOpenPercent is a synchronous ack — the gateway
-    # drives the motor asynchronously and v1 has no real-time position
-    # feedback. Marking the state as assumed makes HomeKit accept the
-    # commanded position as terminal instead of hanging on "Opening…".
-    _attr_assumed_state = True
+    _attr_assumed_state = False
+
 
     def __init__(self, coordinator: FinderYouCoordinator, shutter: Shutter) -> None:
         super().__init__(coordinator)
         self._shutter = shutter
         self._attr_unique_id = f"{DOMAIN}_{shutter.uuid}"
-        self._attr_name = shutter.name
+        self._attr_name = None
+
+        connections = set()
+        ble_dev = coordinator.ble_inventory.get(shutter.uuid)
+        if ble_dev and ble_dev.mac:
+            connections.add((dr.CONNECTION_BLUETOOTH, ble_dev.mac.lower()))
+
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, shutter.uuid)},
+            connections=connections,
             name=shutter.name,
             manufacturer="Finder",
             model="YESLY Roller Shutter",
             suggested_area=shutter.room,
         )
-        self._last_commanded_position: int = 100
+        self._last_commanded_position: int | None = None
 
     async def async_added_to_hass(self) -> None:
-        """Restore the last commanded position from before HA restarted.
-
-        Without this, HA boots with every cover defaulted to position 100
-        (open). The HomeKit bridge remembers the user's last target
-        (often 0 if they closed everything before bed) and shows the
-        Home tile stuck on "Closing…" forever because CurrentPosition
-        and TargetPosition disagree until the user issues a new command.
-        """
+        """Restore the last position from before HA restarted."""
         await super().async_added_to_hass()
         last = await self.async_get_last_state()
         if last is not None:
@@ -78,17 +77,23 @@ class FinderYouCover(CoordinatorEntity[FinderYouCoordinator], CoverEntity, Resto
 
     @property
     def current_cover_position(self) -> int | None:
-        """Return the observed position, falling back to last-commanded.
-
-        ``coordinator.async_set_position`` blocks until the gateway's
-        plant cache confirms the action, so by the time HomeKit asks for
-        the position after a successful command the observed value will
-        already reflect it. The last-commanded fallback only kicks in
-        when the coordinator hasn't populated data yet (e.g. just after
-        startup).
-        """
+        """Return observed position from coordinator, falling back to restored state."""
         observed = self.coordinator.data.get(self._shutter.uuid) if self.coordinator.data else None
-        return observed if observed is not None else self._last_commanded_position
+        if observed is not None:
+            return observed
+        return self._last_commanded_position
+
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available.
+
+        Stays available if local BLE routing is active or if coordinator is healthy,
+        preventing entities from becoming unavailable during brief cloud gRPC drops.
+        """
+        if self.coordinator.enable_local_ble or self._last_commanded_position is not None:
+            return True
+        return super().available
 
     @property
     def is_closed(self) -> bool | None:
@@ -98,6 +103,7 @@ class FinderYouCover(CoordinatorEntity[FinderYouCoordinator], CoverEntity, Resto
         return pos == 0
 
     async def _send(self, op, target_position: int) -> None:
+        self._last_commanded_position = target_position
         try:
             await op()
         except GatewayOfflineError as err:
@@ -110,14 +116,23 @@ class FinderYouCover(CoordinatorEntity[FinderYouCoordinator], CoverEntity, Resto
                 f"YESLY gateway didn't acknowledge the {self._shutter.name} "
                 f"command ({err}). Try power-cycling the gateway if this persists."
             ) from err
-        self._last_commanded_position = target_position
+        # Update with real observed position from coordinator if present
+        observed = self.coordinator.data.get(self._shutter.uuid) if self.coordinator.data else None
+        if observed is not None:
+            self._last_commanded_position = observed
+        else:
+            self._last_commanded_position = target_position
         self.async_write_ha_state()
+
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         await self._send(lambda: self.coordinator.async_open(self._shutter.uuid), 100)
 
     async def async_close_cover(self, **kwargs: Any) -> None:
         await self._send(lambda: self.coordinator.async_close_shutter(self._shutter.uuid), 0)
+
+    async def async_stop_cover(self, **kwargs: Any) -> None:
+        await self.coordinator.async_stop_shutter(self._shutter.uuid)
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         pos = kwargs[ATTR_POSITION]

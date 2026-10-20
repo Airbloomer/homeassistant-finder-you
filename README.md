@@ -59,6 +59,16 @@ demands before it will accept device-touching calls.
   for the Bliss-side reverse engineering that proved the broader Finder
   cloud was tractable.
 
+---
+
+## Integrazione Ibrida: Local-First BLE via BLE_Finder_Yesly
+
+Questa integrazione supporta l'operatività combinata con il progetto compagno [`BLE_Finder_Yesly`](https://github.com/francescodoffizi/BLE_Finder_Yesly):
+- **Local-First Routing**: Invia comandi diretti ultra-veloci (0 latenza, offline) via Bluetooth Proxy / ESPHome ai singoli nodi Yesly (`13S2`, `1322`).
+- **Cloud Fallback Automatico**: Se il segnale radio BLE locale non risponde o il proxy non è raggiungibile, il coordinator instrada istantaneamente il comando attraverso le API Finder Cloud gRPC/HTTP2 ufficiali.
+- **Topologia Condivisa**: Tramite `topology.py`, i mapping UUID <-> MAC address e le chiavi cifrate AES dell'impianto vengono usati in sinergia per il controllo radio diretto.
+
 ## License
 
 MIT.
+

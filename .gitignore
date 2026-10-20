@@ -7,3 +7,8 @@ __pycache__/
 .DS_Store
 *.log
 .mcp.json
+test_*.py
+inspect_*.py
+check_*.py
+read_*.py
+update_yaml_entities.py
